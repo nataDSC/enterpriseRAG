@@ -1,8 +1,10 @@
-from enterprise_rag.embedding import HashingEmbedder
+from __future__ import annotations
+
+from enterprise_rag.embedding import EmbedderProtocol, HashingEmbedder
 from enterprise_rag.keyword_index import KeywordIndex
 from enterprise_rag.models import CatalogItem, SearchResult
 from enterprise_rag.reranker import LightweightReranker
-from enterprise_rag.vector_store import InMemoryVectorStore
+from enterprise_rag.vector_store import InMemoryVectorStore, VectorStoreProtocol
 
 
 class HybridSearchEngine:
@@ -11,16 +13,18 @@ class HybridSearchEngine:
         items: list[CatalogItem],
         vector_weight: float = 0.55,
         keyword_weight: float = 0.45,
+        embedder: EmbedderProtocol | None = None,
+        vector_store: VectorStoreProtocol | None = None,
     ) -> None:
         self.items = items
         self.vector_weight = vector_weight
         self.keyword_weight = keyword_weight
-        self.embedder = HashingEmbedder()
-        self.vector_store = InMemoryVectorStore()
+        self.embedder = embedder if embedder is not None else HashingEmbedder()
+        self.vector_store = vector_store if vector_store is not None else InMemoryVectorStore()
         self.keyword_index = KeywordIndex()
         self.reranker = LightweightReranker()
 
-        vectors = [self.embedder.embed(item.to_index_text()) for item in items]
+        vectors = self.embedder.embed_batch([item.to_index_text() for item in items])
         self.vector_store.build(items, vectors)
         self.keyword_index.build(items)
 

@@ -19,9 +19,12 @@ This MVP uses:
    - `python -m enterprise_rag.main`
 4. Run your own query:
    - `python -m enterprise_rag.main "edge gpu low latency inference" --top-k 3`
-5. Launch the Streamlit dashboard:
+5. Configure local environment variables:
+   - `cp .env.example .env`
+   - Add your key in `.env`: `OPENAI_API_KEY=your_key_here`
+6. Launch the Streamlit dashboard:
    - `streamlit run streamlit_app.py`
-6. Run tests:
+7. Run tests:
    - `pytest`
 
 ## Dashboard

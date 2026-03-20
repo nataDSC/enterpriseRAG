@@ -5,10 +5,23 @@ import time
 from datetime import datetime
 
 import streamlit as st
+from dotenv import load_dotenv
 
 from enterprise_rag.mock_catalog import load_mock_catalog
 from enterprise_rag.models import CatalogItem
 from enterprise_rag.search_engine import HybridSearchEngine
+from enterprise_rag.llm_synthesizer import get_synthesizer_from_env, TemplateSynthesizer
+
+load_dotenv()
+
+EMBEDDER_OPTIONS = {
+    "Hashing (fast, no download)": "hashing",
+    "Sentence-Transformers (semantic, ~80 MB)": "sentence-transformers",
+}
+VECTOR_STORE_OPTIONS = {
+    "In-Memory (numpy)": "inmemory",
+    "FAISS (flat IP index)": "faiss",
+}
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -37,6 +50,28 @@ def get_categories() -> list[str]:
     return sorted({item.category for item in get_catalog()})
 
 
+@st.cache_resource(show_spinner="Loading backend…")
+def get_engine(
+    embedder_key: str,
+    vector_store_key: str,
+    items_hash: int,
+) -> HybridSearchEngine:
+    """Build and cache an engine per (embedder, vector_store) combo."""
+    from enterprise_rag.embedding import HashingEmbedder, SentenceTransformerEmbedder  # noqa: PLC0415
+    from enterprise_rag.vector_store import InMemoryVectorStore, FAISSVectorStoreAdapter  # noqa: PLC0415
+
+    embedder = SentenceTransformerEmbedder() if embedder_key == "sentence-transformers" else HashingEmbedder()
+    if vector_store_key == "faiss":
+        try:
+            store = FAISSVectorStoreAdapter()
+        except Exception:
+            st.warning("faiss-cpu not installed — falling back to In-Memory store.")
+            store = InMemoryVectorStore()
+    else:
+        store = InMemoryVectorStore()
+    return HybridSearchEngine(items=get_catalog(), embedder=embedder, vector_store=store)
+
+
 # ---------------------------------------------------------------------------
 # Search
 # ---------------------------------------------------------------------------
@@ -50,6 +85,8 @@ def run_query(
     keyword_weight: float,
     allowed_categories: list[str] | None,
     sku_filter: str,
+    embedder_key: str,
+    vector_store_key: str,
 ):
     catalog = get_catalog()
     filtered: list[CatalogItem] = [
@@ -61,11 +98,9 @@ def run_query(
     if not filtered:
         return [], 0.0
 
-    engine = HybridSearchEngine(
-        items=filtered,
-        vector_weight=vector_weight,
-        keyword_weight=keyword_weight,
-    )
+    engine = get_engine(embedder_key, vector_store_key, id(tuple(i.item_id for i in filtered)))
+    engine.vector_weight = vector_weight
+    engine.keyword_weight = keyword_weight
     start = time.perf_counter()
     results = engine.search(query, top_k=top_k, candidate_k=candidate_k)
     elapsed_ms = (time.perf_counter() - start) * 1000
@@ -73,53 +108,19 @@ def run_query(
 
 
 # ---------------------------------------------------------------------------
-# LLM answer synthesis
+# Answer synthesis (delegates to llm_synthesizer module)
 # ---------------------------------------------------------------------------
 
 
-def synthesize_answer(query: str, results) -> str:
-    if not results:
-        return "No matching products found for this query."
-
-    citations = "\n".join(
-        f"[{i + 1}] {r.item.name} ({r.item.sku}): {r.item.description}"
-        for i, r in enumerate(results[:3])
-    )
-
-    api_key = os.environ.get("OPENAI_API_KEY", "")
-    if api_key:
-        try:
-            from openai import OpenAI  # noqa: PLC0415
-
-            client = OpenAI(api_key=api_key)
-            prompt = (
-                "You are a Sales Engineer AI helping a customer find the right product.\n\n"
-                f"Customer requirements: {query}\n\n"
-                f"Top matching products:\n{citations}\n\n"
-                "Write a 2-3 sentence recommendation that maps their requirements to these "
-                "products. Cite each product by its number in brackets like [1]."
-            )
-            response = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=200,
-                temperature=0.3,
-            )
-            return response.choices[0].message.content.strip()
-        except Exception as exc:
-            return f"[LLM error: {exc}]\n\nFallback: see ranked results below."
-
-    # Template-based fallback - no API key required
-    top = results[0].item
-    others = [r.item for r in results[1:3]]
-    other_names = " and ".join(f"**{i.name}** [{j + 2}]" for j, i in enumerate(others))
-    answer = (
-        f"Based on the query **\"{query}\"**, the best match is **{top.name}** [1] "
-        f"— {top.description}"
-    )
-    if other_names:
-        answer += f" You may also consider {other_names}."
-    return answer
+def synthesize_answer(query: str, results, openai_key: str = "") -> str:
+    synth = get_synthesizer_from_env() if not openai_key else __import__(
+        "enterprise_rag.llm_synthesizer", fromlist=["OpenAISynthesizer"]
+    ).OpenAISynthesizer(openai_key)
+    try:
+        return synth.synthesize(query, results)
+    except Exception as exc:
+        fallback = TemplateSynthesizer()
+        return f"[LLM error: {exc}]\n\n{fallback.synthesize(query, results)}"
 
 
 # ---------------------------------------------------------------------------
@@ -149,6 +150,12 @@ def main() -> None:
         vector_weight = st.slider("Vector Weight", min_value=0.0, max_value=1.0, value=0.55, step=0.05)
         keyword_weight = 1.0 - vector_weight
         st.caption(f"Keyword Weight: {keyword_weight:.2f}")
+
+        st.subheader("Backend")
+        embedder_label = st.selectbox("Embedder", list(EMBEDDER_OPTIONS.keys()), index=0)
+        embedder_key = EMBEDDER_OPTIONS[embedder_label]
+        vector_store_label = st.selectbox("Vector Store", list(VECTOR_STORE_OPTIONS.keys()), index=0)
+        vector_store_key = VECTOR_STORE_OPTIONS[vector_store_label]
 
         st.subheader("Filters")
         all_categories = get_categories()
@@ -202,15 +209,14 @@ def main() -> None:
             keyword_weight=keyword_weight,
             allowed_categories=selected_categories if selected_categories != all_categories else None,
             sku_filter=sku_filter.strip(),
+            embedder_key=embedder_key,
+            vector_store_key=vector_store_key,
         )
 
         col1, col2, col3 = st.columns(3)
         col1.metric("Retrieved Results", len(results))
         col2.metric("Retrieval Latency", f"{elapsed_ms:.2f} ms")
-        col3.metric(
-            "Filters Active",
-            "Yes" if (len(selected_categories) < len(all_categories) or sku_filter.strip()) else "No",
-        )
+        col3.metric("Backend", f"{embedder_key} / {vector_store_key}")
 
         if not results:
             st.warning("No results found. Try broadening the query or adjusting filters.")
@@ -219,7 +225,7 @@ def main() -> None:
         # ---- AI Answer panel ----
         st.subheader("AI Answer")
         with st.spinner("Generating answer…"):
-            answer = synthesize_answer(query, results)
+            answer = synthesize_answer(query, results, os.environ.get("OPENAI_API_KEY", ""))
         with st.container(border=True):
             st.markdown(answer)
             st.caption(
@@ -227,7 +233,7 @@ def main() -> None:
                 + " · ".join(f"[{i + 1}] {r.item.sku}" for i, r in enumerate(results[:3]))
             )
             if not os.environ.get("OPENAI_API_KEY"):
-                st.caption("Tip: set `OPENAI_API_KEY` env var for GPT-4o-mini powered answers.")
+                st.caption("Tip: set `OPENAI_API_KEY` in your environment for GPT-4o-mini answers.")
 
         # ---- Ranked results ----
         st.subheader("Ranked Results")
