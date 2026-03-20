@@ -21,6 +21,7 @@ EMBEDDER_OPTIONS = {
 VECTOR_STORE_OPTIONS = {
     "In-Memory (numpy)": "inmemory",
     "FAISS (flat IP index)": "faiss",
+    "Supabase / pgvector": "supabase",
 }
 
 # ---------------------------------------------------------------------------
@@ -58,7 +59,7 @@ def get_engine(
 ) -> HybridSearchEngine:
     """Build and cache an engine per (embedder, vector_store) combo."""
     from enterprise_rag.embedding import HashingEmbedder, SentenceTransformerEmbedder  # noqa: PLC0415
-    from enterprise_rag.vector_store import InMemoryVectorStore, FAISSVectorStoreAdapter  # noqa: PLC0415
+    from enterprise_rag.vector_store import InMemoryVectorStore, FAISSVectorStoreAdapter, SupabaseVectorStoreAdapter  # noqa: PLC0415
 
     embedder = SentenceTransformerEmbedder() if embedder_key == "sentence-transformers" else HashingEmbedder()
     if vector_store_key == "faiss":
@@ -67,6 +68,17 @@ def get_engine(
         except Exception:
             st.warning("faiss-cpu not installed — falling back to In-Memory store.")
             store = InMemoryVectorStore()
+    elif vector_store_key == "supabase":
+        db_url = os.environ.get("SUPABASE_DB_URL", "")
+        if not db_url:
+            st.error("SUPABASE_DB_URL is not set in .env — falling back to In-Memory store.")
+            store = InMemoryVectorStore()
+        else:
+            try:
+                store = SupabaseVectorStoreAdapter(db_url=db_url)
+            except Exception as exc:
+                st.error(f"Supabase connection failed: {exc} — falling back to In-Memory store.")
+                store = InMemoryVectorStore()
     else:
         store = InMemoryVectorStore()
     return HybridSearchEngine(items=get_catalog(), embedder=embedder, vector_store=store)
@@ -98,7 +110,7 @@ def run_query(
     if not filtered:
         return [], 0.0
 
-    engine = get_engine(embedder_key, vector_store_key, id(tuple(i.item_id for i in filtered)))
+    engine = get_engine(embedder_key, vector_store_key, hash(tuple(i.item_id for i in filtered)))
     engine.vector_weight = vector_weight
     engine.keyword_weight = keyword_weight
     start = time.perf_counter()
@@ -156,6 +168,8 @@ def main() -> None:
         embedder_key = EMBEDDER_OPTIONS[embedder_label]
         vector_store_label = st.selectbox("Vector Store", list(VECTOR_STORE_OPTIONS.keys()), index=0)
         vector_store_key = VECTOR_STORE_OPTIONS[vector_store_label]
+
+        st.caption(f"Active: `{embedder_key}` / `{vector_store_key}`")
 
         has_openai_key = bool(os.environ.get("OPENAI_API_KEY", "").strip())
         if has_openai_key:

@@ -29,6 +29,10 @@ faiss = [
 llm = [
   "openai>=1.0"
 ]
+supabase = [
+  "psycopg2-binary>=2.9",
+  "pgvector>=0.3"
+]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
