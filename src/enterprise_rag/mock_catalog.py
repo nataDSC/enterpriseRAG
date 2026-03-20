@@ -1,0 +1,86 @@
+from enterprise_rag.models import CatalogItem
+
+
+def load_mock_catalog() -> list[CatalogItem]:
+    return [
+        CatalogItem(
+            item_id="p1",
+            sku="SEC-IAM-001",
+            name="IdentityHub Enterprise SSO",
+            category="Security",
+            description="Enterprise single sign-on with SAML, OIDC, and SCIM provisioning.",
+            features=["mfa", "sso", "saml", "oidc", "scim", "zero trust"],
+        ),
+        CatalogItem(
+            item_id="p2",
+            sku="SEC-IAM-002",
+            name="Privileged Access Vault",
+            category="Security",
+            description="Secure vault for rotating privileged credentials and session recording.",
+            features=["pam", "credential rotation", "audit", "session replay"],
+        ),
+        CatalogItem(
+            item_id="p3",
+            sku="DATA-DB-011",
+            name="Velocity Vector Database",
+            category="Data Platform",
+            description="Low-latency vector search with IVF-HNSW and scalar metadata filtering.",
+            features=["vector", "ann", "hnsw", "ivf", "millisecond latency"],
+        ),
+        CatalogItem(
+            item_id="p4",
+            sku="DATA-DB-012",
+            name="Relational Lakehouse Connector",
+            category="Data Platform",
+            description="Federated SQL queries across cloud warehouses and operational stores.",
+            features=["sql", "federation", "analytics", "bi"],
+        ),
+        CatalogItem(
+            item_id="p5",
+            sku="AI-RAG-201",
+            name="Document Grounding Service",
+            category="AI",
+            description="RAG-ready chunking, metadata enrichment, and citation generation.",
+            features=["rag", "chunking", "metadata", "citations"],
+        ),
+        CatalogItem(
+            item_id="p6",
+            sku="AI-OBS-203",
+            name="Prompt Safety Firewall",
+            category="AI",
+            description="Policy enforcement for prompt injection defense and sensitive data masking.",
+            features=["guardrails", "prompt injection", "pii redaction", "policy"],
+        ),
+        CatalogItem(
+            item_id="p7",
+            sku="NET-EDGE-301",
+            name="Edge GPU Inference Appliance",
+            category="Edge",
+            description="On-prem edge appliance with GPU acceleration for private AI inference.",
+            features=["edge", "gpu", "low latency", "air-gapped"],
+        ),
+        CatalogItem(
+            item_id="p8",
+            sku="NET-CDN-302",
+            name="Adaptive API Gateway",
+            category="Networking",
+            description="Smart API gateway with rate limiting, WAF rules, and traffic shaping.",
+            features=["api", "gateway", "waf", "traffic control"],
+        ),
+        CatalogItem(
+            item_id="p9",
+            sku="CRM-SE-401",
+            name="Sales Engineer Assistant",
+            category="Sales Enablement",
+            description="Conversational assistant for mapping customer requirements to SKUs.",
+            features=["catalog qa", "requirement mapping", "proposal assist"],
+        ),
+        CatalogItem(
+            item_id="p10",
+            sku="OBS-OPS-501",
+            name="Observability Mesh",
+            category="Operations",
+            description="Distributed traces, logs, and metrics with SLO-driven alerting.",
+            features=["otel", "tracing", "metrics", "slo"],
+        ),
+    ]
