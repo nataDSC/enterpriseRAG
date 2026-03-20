@@ -157,6 +157,12 @@ def main() -> None:
         vector_store_label = st.selectbox("Vector Store", list(VECTOR_STORE_OPTIONS.keys()), index=0)
         vector_store_key = VECTOR_STORE_OPTIONS[vector_store_label]
 
+        has_openai_key = bool(os.environ.get("OPENAI_API_KEY", "").strip())
+        if has_openai_key:
+            st.success("OpenAI key detected")
+        else:
+            st.warning("OpenAI key not found")
+
         st.subheader("Filters")
         all_categories = get_categories()
         selected_categories = st.multiselect(
