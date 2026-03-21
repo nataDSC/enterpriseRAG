@@ -14,6 +14,39 @@ from enterprise_rag.llm_synthesizer import get_synthesizer_from_env, TemplateSyn
 
 load_dotenv()
 
+
+def get_config_value(key: str, default: str = "") -> str:
+    """Resolve config from env vars first, then Streamlit secrets."""
+    env_val = os.environ.get(key)
+    if env_val:
+        return env_val
+    try:
+        val = st.secrets.get(key, default)
+        return str(val) if val is not None else default
+    except Exception:
+        return default
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def check_supabase_health(db_url: str) -> tuple[bool, str]:
+    """Return (is_healthy, detail) for Supabase/Postgres connectivity."""
+    if not db_url:
+        return False, "SUPABASE_DB_URL not set"
+
+    try:
+        import psycopg2  # noqa: PLC0415
+
+        conn = psycopg2.connect(db_url, connect_timeout=3)
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1;")
+                cur.fetchone()
+            return True, "Connected"
+        finally:
+            conn.close()
+    except Exception as exc:
+        return False, str(exc)
+
 EMBEDDER_OPTIONS = {
     "Hashing (fast, no download)": "hashing",
     "Sentence-Transformers (semantic, ~80 MB)": "sentence-transformers",
@@ -69,7 +102,7 @@ def get_engine(
             st.warning("faiss-cpu not installed — falling back to In-Memory store.")
             store = InMemoryVectorStore()
     elif vector_store_key == "supabase":
-        db_url = os.environ.get("SUPABASE_DB_URL", "")
+        db_url = get_config_value("SUPABASE_DB_URL")
         if not db_url:
             st.error("SUPABASE_DB_URL is not set in .env — falling back to In-Memory store.")
             store = InMemoryVectorStore()
@@ -171,7 +204,14 @@ def main() -> None:
 
         st.caption(f"Active: `{embedder_key}` / `{vector_store_key}`")
 
-        has_openai_key = bool(os.environ.get("OPENAI_API_KEY", "").strip())
+        if vector_store_key == "supabase":
+            ok, detail = check_supabase_health(get_config_value("SUPABASE_DB_URL"))
+            if ok:
+                st.success("Supabase DB: Connected")
+            else:
+                st.warning(f"Supabase DB: Unreachable ({detail})")
+
+        has_openai_key = bool(get_config_value("OPENAI_API_KEY").strip())
         if has_openai_key:
             st.success("OpenAI key detected")
         else:
@@ -245,14 +285,14 @@ def main() -> None:
         # ---- AI Answer panel ----
         st.subheader("AI Answer")
         with st.spinner("Generating answer…"):
-            answer = synthesize_answer(query, results, os.environ.get("OPENAI_API_KEY", ""))
+            answer = synthesize_answer(query, results, get_config_value("OPENAI_API_KEY"))
         with st.container(border=True):
             st.markdown(answer)
             st.caption(
                 "Citations: "
                 + " · ".join(f"[{i + 1}] {r.item.sku}" for i, r in enumerate(results[:3]))
             )
-            if not os.environ.get("OPENAI_API_KEY"):
+            if not get_config_value("OPENAI_API_KEY"):
                 st.caption("Tip: set `OPENAI_API_KEY` in your environment for GPT-4o-mini answers.")
 
         # ---- Ranked results ----

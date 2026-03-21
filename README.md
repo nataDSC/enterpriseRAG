@@ -43,3 +43,42 @@ The Streamlit app provides:
 - `src/enterprise_rag/keyword_index.py` lexical keyword scoring
 - `src/enterprise_rag/reranker.py` re-ranking layer
 - `src/enterprise_rag/mock_catalog.py` mock product catalog data
+
+## Deploy to Streamlit Community Cloud
+
+### Checklist
+
+1. Push this project to GitHub.
+2. Open Streamlit Community Cloud and create a new app.
+3. Select your repo/branch and set the app entry file to `streamlit_app.py`.
+4. In app settings, add secrets:
+
+```toml
+OPENAI_API_KEY = "your_openai_key"
+SUPABASE_DB_URL = "your_supabase_postgres_url"
+APP_ENV = "production"
+```
+
+5. Deploy and verify the app opens successfully.
+
+### Supabase connection options
+
+You can use either of these for `SUPABASE_DB_URL`:
+
+1. Public/reachable Supabase Postgres URL (recommended for cloud hosting).
+2. ngrok-exposed Postgres URL (works for demos if your local database is tunneled).
+
+### If using ngrok for Supabase
+
+Use your ngrok hostname/port in the connection string, for example:
+
+```text
+postgresql://postgres:your_password@your-ngrok-hostname:your-ngrok-port/postgres
+```
+
+Important notes:
+
+1. Streamlit Community Cloud cannot access `localhost` on your machine, so local Docker URLs will not work directly.
+2. Keep the ngrok tunnel running continuously or the app will lose DB connectivity.
+3. Free ngrok endpoints may rotate; update `SUPABASE_DB_URL` in Streamlit secrets when that happens.
+4. Prefer a stable hosted database for long-term deployments.

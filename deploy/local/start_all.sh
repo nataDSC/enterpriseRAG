@@ -15,6 +15,22 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 PROXY="${PROXY:-caddy}"
 
+# Load .env so APP_ENV is available
+set -o allexport
+# shellcheck disable=SC1091
+[[ -f "$REPO_ROOT/.env" ]] && source "$REPO_ROOT/.env"
+set +o allexport
+
+# Hide the Streamlit deploy/toolbar button in non-development environments
+APP_ENV="${APP_ENV:-development}"
+if [[ "$APP_ENV" != "development" ]]; then
+  export STREAMLIT_CLIENT_TOOLBAR_MODE="viewer"
+  echo "==> APP_ENV=$APP_ENV — Streamlit toolbar hidden"
+else
+  export STREAMLIT_CLIENT_TOOLBAR_MODE="developer"
+  echo "==> APP_ENV=$APP_ENV — Streamlit toolbar visible"
+fi
+
 echo "==> Starting from: $REPO_ROOT"
 
 # ---- App 1: Enterprise RAG ----

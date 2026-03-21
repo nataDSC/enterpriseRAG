@@ -1,0 +1,9 @@
+[client]
+# toolbarMode controls the top-right Streamlit toolbar including the Deploy button.
+# developer  → full toolbar, deploy button visible  (default for local dev)
+# viewer     → toolbar hidden, no deploy button      (use in production/staging)
+# minimal    → only the running indicator shown
+#
+# This value is overridden at runtime by the STREAMLIT_CLIENT_TOOLBAR_MODE
+# environment variable, so no file edit is needed between environments.
+toolbarMode = "developer"
