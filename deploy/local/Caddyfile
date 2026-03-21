@@ -1,0 +1,54 @@
+# Caddy reverse proxy — routes one ngrok URL to 3 local Streamlit apps
+#
+# Ports:
+#   8501 → app1 (enterpriseRAG)
+#   8502 → app2 (future project 2)
+#   8503 → app3 (future project 3)
+#
+# Start Caddy:   caddy run --config deploy/local/Caddyfile
+# Expose:        ngrok http 8080
+# Access:
+#   https://<ngrok>/app1
+#   https://<ngrok>/app2
+#   https://<ngrok>/app3
+
+:8080 {
+    encode gzip
+
+    # ---- App 1: Enterprise RAG ----
+    handle /app1* {
+        reverse_proxy localhost:8501 {
+            header_up Host {upstream_hostport}
+        }
+    }
+
+    # ---- App 2: Project 2 (placeholder) ----
+    handle /app2* {
+        reverse_proxy localhost:8502 {
+            header_up Host {upstream_hostport}
+        }
+    }
+
+    # ---- App 3: Project 3 (placeholder) ----
+    handle /app3* {
+        reverse_proxy localhost:8503 {
+            header_up Host {upstream_hostport}
+        }
+    }
+
+    # Landing page listing available apps
+    handle / {
+        respond `<!DOCTYPE html>
+<html>
+<head><title>Demo Apps</title></head>
+<body style="font-family:sans-serif;max-width:500px;margin:4rem auto">
+  <h2>Demo Apps</h2>
+  <ul>
+    <li><a href="/app1">App 1 — Enterprise RAG</a></li>
+    <li><a href="/app2">App 2 — (coming soon)</a></li>
+    <li><a href="/app3">App 3 — (coming soon)</a></li>
+  </ul>
+</body>
+</html>` 200
+    }
+}
