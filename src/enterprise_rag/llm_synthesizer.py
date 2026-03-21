@@ -69,13 +69,35 @@ class OpenAISynthesizer(SynthesizerBase):
             "mention its confidence score."
         )
         client = OpenAI(api_key=self.api_key)
+
+        import time as _time  # noqa: PLC0415
+        t0 = _time.perf_counter()
         response = client.chat.completions.create(
             model=self.model,
             messages=[{"role": "user", "content": prompt}],
             max_tokens=220,
             temperature=0.3,
         )
-        return response.choices[0].message.content.strip()
+        elapsed = _time.perf_counter() - t0
+        result_text = response.choices[0].message.content.strip()
+
+        try:
+            from enterprise_rag.telemetry import langfuse_log_generation  # noqa: PLC0415
+
+            usage = response.usage
+            langfuse_log_generation(
+                "llm_synthesis",
+                model=self.model,
+                input=[{"role": "user", "content": prompt}],
+                output=result_text,
+                usage_input=usage.prompt_tokens if usage else 0,
+                usage_output=usage.completion_tokens if usage else 0,
+                metadata={"latency_ms": round(elapsed * 1000, 1), "query": query},
+            )
+        except Exception:
+            pass
+
+        return result_text
 
 
 def get_synthesizer(api_key: str = "") -> SynthesizerBase:

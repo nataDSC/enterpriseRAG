@@ -33,6 +33,13 @@ supabase = [
   "psycopg2-binary>=2.9",
   "pgvector>=0.3"
 ]
+observability = [
+  "sentry-sdk>=2.0",
+  "opentelemetry-api>=1.24",
+  "opentelemetry-sdk>=1.24",
+  "opentelemetry-exporter-otlp-proto-http>=1.24",
+  "langfuse>=2.0"
+]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

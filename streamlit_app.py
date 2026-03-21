@@ -1,18 +1,108 @@
 from __future__ import annotations
 
+import json
+import logging
 import os
 import time
 from datetime import datetime
+from uuid import uuid4
 
 import streamlit as st
 from dotenv import load_dotenv
 
 from enterprise_rag.mock_catalog import load_mock_catalog
+from enterprise_rag.telemetry import capture_exception, get_tracer, init_all, langfuse_log_event
 from enterprise_rag.models import CatalogItem
 from enterprise_rag.search_engine import HybridSearchEngine
 from enterprise_rag.llm_synthesizer import get_synthesizer_from_env, TemplateSynthesizer
 
 load_dotenv()
+
+logger = logging.getLogger("enterprise_rag.observability")
+if not logger.handlers:
+    logger.setLevel(logging.INFO)
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    logger.addHandler(handler)
+
+
+def obs_enabled() -> bool:
+    return get_config_value("OBSERVABILITY_ENABLED", "true").lower() == "true"
+
+
+def log_event(event: str, **fields) -> None:
+    if not obs_enabled():
+        return
+    payload = {
+        "ts": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "event": event,
+        **fields,
+    }
+    logger.info(json.dumps(payload, ensure_ascii=True))
+    events = st.session_state.get("obs_events", [])
+    events.append(payload)
+    st.session_state["obs_events"] = events[-50:]
+
+
+def percentile(values: list[float], q: float) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    idx = int(round((q / 100.0) * (len(ordered) - 1)))
+    return ordered[idx]
+
+
+def init_observability_state() -> None:
+    st.session_state.setdefault("obs_events", [])
+    st.session_state.setdefault("obs_queries_total", 0)
+    st.session_state.setdefault("obs_zero_results", 0)
+    st.session_state.setdefault("obs_search_errors", 0)
+    st.session_state.setdefault("obs_llm_errors", 0)
+    st.session_state.setdefault("obs_latencies_ms", [])
+
+
+def send_test_telemetry() -> tuple[bool, str]:
+    """Emit a synthetic event/span/message to configured telemetry backends."""
+    test_id = f"test-{str(uuid4())[:8]}"
+    sent = []
+
+    # Local structured event log (always available if observability is enabled)
+    log_event("telemetry_test", request_id=test_id, source="manual_button")
+    sent.append("local")
+
+    # OpenTelemetry test span
+    try:
+        tracer = get_tracer()
+        with tracer.start_as_current_span("telemetry_test", attributes={"request_id": test_id}) as span:
+            span.set_attribute("test", True)
+        sent.append("otel")
+    except Exception as exc:
+        capture_exception(exc)
+
+    # Sentry test message
+    try:
+        import sentry_sdk  # noqa: PLC0415
+
+        sentry_sdk.capture_message(f"Telemetry test event ({test_id})", level="info")
+        sent.append("sentry")
+    except Exception:
+        pass
+
+    # Langfuse test event
+    try:
+        if langfuse_log_event(
+            "telemetry_test",
+            input={"request_id": test_id, "action": "test_button"},
+            output={"status": "ok"},
+            metadata={"source": "manual_button"},
+        ):
+            sent.append("langfuse")
+    except Exception as exc:
+        capture_exception(exc)
+
+    if len(sent) <= 1:
+        return False, f"No external backend accepted the test. id={test_id}"
+    return True, f"Sent test event to: {', '.join(sent)} (id={test_id})"
 
 
 def get_config_value(key: str, default: str = "") -> str:
@@ -46,6 +136,54 @@ def check_supabase_health(db_url: str) -> tuple[bool, str]:
             conn.close()
     except Exception as exc:
         return False, str(exc)
+
+
+def render_deployment_readiness(tel: dict[str, bool]) -> None:
+    """Render deployment checks to speed up production verification."""
+    app_env = get_config_value("APP_ENV", "development")
+    openai_ok = bool(get_config_value("OPENAI_API_KEY").strip())
+    db_url = get_config_value("SUPABASE_DB_URL")
+    supa_ok, supa_detail = check_supabase_health(db_url)
+    obs_ok = obs_enabled()
+    telemetry_ok = any(tel.values())
+
+    with st.expander("Deployment Readiness", expanded=False):
+        if app_env == "production":
+            st.success("APP_ENV=production")
+        else:
+            st.warning(f"APP_ENV={app_env} (set to production for deploy)")
+
+        if openai_ok:
+            st.success("OPENAI_API_KEY present")
+        else:
+            st.warning("OPENAI_API_KEY missing")
+
+        if db_url:
+            st.success("SUPABASE_DB_URL present")
+        else:
+            st.warning("SUPABASE_DB_URL missing")
+
+        if supa_ok:
+            st.success("Supabase reachable")
+        else:
+            st.warning(f"Supabase unreachable ({supa_detail})")
+
+        if obs_ok:
+            st.success("Observability enabled")
+        else:
+            st.warning("Observability disabled")
+
+        if telemetry_ok:
+            active = ", ".join(name for name, is_on in tel.items() if is_on)
+            st.success(f"Telemetry active: {active}")
+        else:
+            st.warning("No telemetry backend active")
+
+        deploy_ready = app_env == "production" and openai_ok and db_url and supa_ok
+        if deploy_ready:
+            st.success("Ready to deploy")
+        else:
+            st.info("Not deployment-ready yet. Resolve warnings above.")
 
 EMBEDDER_OPTIONS = {
     "Hashing (fast, no download)": "hashing",
@@ -157,15 +295,15 @@ def run_query(
 # ---------------------------------------------------------------------------
 
 
-def synthesize_answer(query: str, results, openai_key: str = "") -> str:
+def synthesize_answer(query: str, results, openai_key: str = "") -> tuple[str, bool, str]:
     synth = get_synthesizer_from_env() if not openai_key else __import__(
         "enterprise_rag.llm_synthesizer", fromlist=["OpenAISynthesizer"]
     ).OpenAISynthesizer(openai_key)
     try:
-        return synth.synthesize(query, results)
+        return synth.synthesize(query, results), False, ""
     except Exception as exc:
         fallback = TemplateSynthesizer()
-        return f"[LLM error: {exc}]\n\n{fallback.synthesize(query, results)}"
+        return f"[LLM error: {exc}]\n\n{fallback.synthesize(query, results)}", True, str(exc)
 
 
 # ---------------------------------------------------------------------------
@@ -173,8 +311,32 @@ def synthesize_answer(query: str, results, openai_key: str = "") -> str:
 # ---------------------------------------------------------------------------
 
 
+@st.cache_resource(show_spinner=False)
+def _init_telemetry() -> dict[str, bool]:
+    return init_all()
+
+
+SIDEBAR_WIDTH = 380
+
+
 def main() -> None:
     st.set_page_config(page_title="Sales Engineer AI Demo", page_icon="🔎", layout="wide")
+    init_observability_state()
+
+    # Wider sidebar
+    st.markdown(
+        f"""
+        <style>
+        [data-testid="stSidebar"] {{
+            min-width: {SIDEBAR_WIDTH}px;
+            max-width: {SIDEBAR_WIDTH}px;
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    tel = _init_telemetry()
 
     # Initialise session state
     if "query_history" not in st.session_state:
@@ -217,6 +379,24 @@ def main() -> None:
         else:
             st.warning("OpenAI key not found")
 
+        # Telemetry status
+        with st.expander("Integrations", expanded=False):
+            labels = {"sentry": "Sentry", "otel": "OpenTelemetry", "langfuse": "Langfuse"}
+            for key, label in labels.items():
+                if tel.get(key):
+                    st.success(f"{label}: active")
+                else:
+                    st.caption(f"{label}: not configured")
+
+            if st.button("Send test telemetry", use_container_width=True):
+                ok, msg = send_test_telemetry()
+                if ok:
+                    st.success(msg)
+                else:
+                    st.warning(msg)
+
+        render_deployment_readiness(tel)
+
         st.subheader("Filters")
         all_categories = get_categories()
         selected_categories = st.multiselect(
@@ -244,6 +424,39 @@ def main() -> None:
                 st.session_state["query_history"] = []
                 st.rerun()
 
+        with st.expander("Observability", expanded=False):
+            latencies = st.session_state.get("obs_latencies_ms", [])
+            total = st.session_state.get("obs_queries_total", 0)
+            zero = st.session_state.get("obs_zero_results", 0)
+            search_errors = st.session_state.get("obs_search_errors", 0)
+            llm_errors = st.session_state.get("obs_llm_errors", 0)
+
+            c1, c2 = st.columns(2)
+            c1.metric("Queries", total)
+            c2.metric("Zero results", zero)
+
+            c3, c4 = st.columns(2)
+            c3.metric("Search errors", search_errors)
+            c4.metric("LLM fallback/errors", llm_errors)
+
+            if latencies:
+                c5, c6, c7 = st.columns(3)
+                c5.metric("Latency p50", f"{percentile(latencies, 50):.1f} ms")
+                c6.metric("Latency p95", f"{percentile(latencies, 95):.1f} ms")
+                c7.metric("Latency max", f"{max(latencies):.1f} ms")
+
+            if st.button("Clear observability stats", use_container_width=True):
+                for key, default in (
+                    ("obs_events", []),
+                    ("obs_queries_total", 0),
+                    ("obs_zero_results", 0),
+                    ("obs_search_errors", 0),
+                    ("obs_llm_errors", 0),
+                    ("obs_latencies_ms", []),
+                ):
+                    st.session_state[key] = default
+                st.rerun()
+
     # ---- Main query area ----
     query = st.text_input(
         "Ask about products",
@@ -256,21 +469,55 @@ def main() -> None:
         run_clicked = st.button("Run Search", type="primary")
 
     if run_clicked and query.strip():
+        request_id = str(uuid4())[:8]
         st.session_state["active_query"] = query
         history = st.session_state["query_history"]
         if not history or history[-1]["query"] != query:
             history.append({"query": query, "ts": datetime.now().isoformat(timespec="seconds")})
 
-        results, elapsed_ms = run_query(
+        st.session_state["obs_queries_total"] += 1
+        log_event(
+            "query_started",
+            request_id=request_id,
             query=query,
-            top_k=top_k,
-            candidate_k=candidate_k,
-            vector_weight=vector_weight,
-            keyword_weight=keyword_weight,
-            allowed_categories=selected_categories if selected_categories != all_categories else None,
-            sku_filter=sku_filter.strip(),
-            embedder_key=embedder_key,
-            vector_store_key=vector_store_key,
+            embedder=embedder_key,
+            vector_store=vector_store_key,
+        )
+
+        tracer = get_tracer()
+        with tracer.start_as_current_span(
+            "hybrid_search",
+            attributes={"query": query, "embedder": embedder_key, "vector_store": vector_store_key},
+        ) as span:
+            try:
+                results, elapsed_ms = run_query(
+                    query=query,
+                    top_k=top_k,
+                    candidate_k=candidate_k,
+                    vector_weight=vector_weight,
+                    keyword_weight=keyword_weight,
+                    allowed_categories=selected_categories if selected_categories != all_categories else None,
+                    sku_filter=sku_filter.strip(),
+                    embedder_key=embedder_key,
+                    vector_store_key=vector_store_key,
+                )
+                span.set_attribute("results_count", len(results))
+                span.set_attribute("latency_ms", round(elapsed_ms, 2))
+            except Exception as exc:
+                span.record_exception(exc)
+                st.session_state["obs_search_errors"] += 1
+                capture_exception(exc)
+                log_event("query_failed", request_id=request_id, error=str(exc))
+                st.error(f"Search failed: {exc}")
+                return
+
+        st.session_state["obs_latencies_ms"].append(elapsed_ms)
+        st.session_state["obs_latencies_ms"] = st.session_state["obs_latencies_ms"][-200:]
+        log_event(
+            "query_finished",
+            request_id=request_id,
+            latency_ms=round(elapsed_ms, 2),
+            results_count=len(results),
         )
 
         col1, col2, col3 = st.columns(3)
@@ -279,13 +526,23 @@ def main() -> None:
         col3.metric("Backend", f"{embedder_key} / {vector_store_key}")
 
         if not results:
+            st.session_state["obs_zero_results"] += 1
             st.warning("No results found. Try broadening the query or adjusting filters.")
             return
 
         # ---- AI Answer panel ----
         st.subheader("AI Answer")
         with st.spinner("Generating answer…"):
-            answer = synthesize_answer(query, results, get_config_value("OPENAI_API_KEY"))
+            answer, had_llm_error, llm_error_detail = synthesize_answer(
+                query, results, get_config_value("OPENAI_API_KEY")
+            )
+            if had_llm_error:
+                st.session_state["obs_llm_errors"] += 1
+                log_event(
+                    "llm_fallback_used",
+                    request_id=request_id,
+                    error=llm_error_detail,
+                )
         with st.container(border=True):
             st.markdown(answer)
             st.caption(
