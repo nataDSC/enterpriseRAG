@@ -315,8 +315,31 @@ def synthesize_answer(query: str, results, openai_key: str = "") -> tuple[str, b
 # ---------------------------------------------------------------------------
 
 
+_TELEMETRY_ENV_KEYS = (
+    "SENTRY_DSN",
+    "SENTRY_TRACES_SAMPLE_RATE",
+    "OTEL_EXPORTER_OTLP_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_HEADERS",
+    "OTEL_SERVICE_NAME",
+    "LANGFUSE_PUBLIC_KEY",
+    "LANGFUSE_SECRET_KEY",
+    "LANGFUSE_HOST",
+    "LANGFUSE_BASE_URL",
+)
+
+
 @st.cache_resource(show_spinner=False)
 def _init_telemetry() -> dict[str, bool]:
+    # On Streamlit Cloud, secrets live in st.secrets but may not be in os.environ.
+    # Inject any missing telemetry keys so telemetry.py can read them normally.
+    try:
+        for key in _TELEMETRY_ENV_KEYS:
+            if key not in os.environ:
+                val = st.secrets.get(key)
+                if val:
+                    os.environ[key] = str(val)
+    except Exception:
+        pass
     return init_all()
 
 
