@@ -83,6 +83,30 @@ Important notes:
 3. Free ngrok endpoints may rotate; update `SUPABASE_DB_URL` in Streamlit secrets when that happens.
 4. Prefer a stable hosted database for long-term deployments.
 
+## Deploy Smoke Test Checklist
+
+Use this quick checklist after each deploy or reboot:
+
+1. App boot
+   - App loads without red error banner.
+   - Deployment Readiness panel shows Supabase reachable.
+2. Retrieval path
+   - Select Supabase / pgvector in the sidebar.
+   - Run query: "enterprise saml sso identity".
+   - Confirm at least one result card is returned.
+3. Synthesis path
+   - Confirm a synthesized answer is shown for the query.
+   - If OpenAI key is missing, verify Template mode still returns an answer.
+4. Telemetry path
+   - Open Integrations expander and click Send test telemetry.
+   - Confirm success toast includes at least one external backend.
+5. Access mode
+   - Verify APP_ENV is production in app settings.
+   - Confirm runtime uses restricted DB role URL (enterprise_rag_app.<project-ref>).
+6. Regression sanity
+   - Try one no-results query (for example: "quantum toaster") and confirm graceful handling.
+   - Confirm latency metric and result score breakdown render correctly.
+
 ## Supabase Production Setup
 
 ### Why use two DB roles?
