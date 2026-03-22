@@ -1,1 +1,1 @@
--e .[llm,supabase]
+-e .[llm,supabase,observability]
