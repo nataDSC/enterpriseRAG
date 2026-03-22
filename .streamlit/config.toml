@@ -7,3 +7,6 @@
 # This value is overridden at runtime by the STREAMLIT_CLIENT_TOOLBAR_MODE
 # environment variable, so no file edit is needed between environments.
 toolbarMode = "developer"
+
+[theme]
+base = "dark"
