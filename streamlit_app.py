@@ -241,12 +241,16 @@ def get_engine(
             store = InMemoryVectorStore()
     elif vector_store_key == "supabase":
         db_url = get_config_value("SUPABASE_DB_URL")
+        app_env = get_config_value("APP_ENV", "development")
         if not db_url:
             st.error("SUPABASE_DB_URL is not set in .env — falling back to In-Memory store.")
             store = InMemoryVectorStore()
         else:
             try:
-                store = SupabaseVectorStoreAdapter(db_url=db_url)
+                store = SupabaseVectorStoreAdapter(
+                    db_url=db_url,
+                    allow_writes=app_env != "production",
+                )
             except Exception as exc:
                 st.error(f"Supabase connection failed: {exc} — falling back to In-Memory store.")
                 store = InMemoryVectorStore()

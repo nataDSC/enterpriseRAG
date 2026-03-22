@@ -89,10 +89,11 @@ class SupabaseVectorStoreAdapter:
 
     TABLE = "enterprise_rag_catalog"
 
-    def __init__(self, db_url: str = "") -> None:
+    def __init__(self, db_url: str = "", allow_writes: bool = True) -> None:
         import os  # noqa: PLC0415
 
         self._db_url = db_url or os.environ.get("SUPABASE_DB_URL", "")
+        self._allow_writes = allow_writes
         if not self._db_url:
             raise ValueError(
                 "SUPABASE_DB_URL is not set. "
@@ -146,6 +147,12 @@ class SupabaseVectorStoreAdapter:
             )
         conn.commit()
 
+    def _validate_runtime_table(self, conn) -> None:
+        """Ensure the existing table is present for read-only runtime access."""
+        with conn.cursor() as cur:
+            cur.execute(f"SELECT COUNT(*) FROM {self.TABLE};")
+            cur.fetchone()
+
     def build(self, items: list[CatalogItem], vectors: list[np.ndarray]) -> None:
         if not items:
             raise ValueError("Cannot build Supabase index with no items.")
@@ -159,6 +166,9 @@ class SupabaseVectorStoreAdapter:
         conn = self._connect()
         try:
             register_vector(conn)
+            if not self._allow_writes:
+                self._validate_runtime_table(conn)
+                return
             self._ensure_schema(conn, dimension)
             with conn.cursor() as cur:
                 cur.execute(f"TRUNCATE TABLE {self.TABLE};")
@@ -194,6 +204,15 @@ class SupabaseVectorStoreAdapter:
                 conn.commit()
         finally:
             conn.close()
+
+    def bootstrap(self, items: list[CatalogItem], vectors: list[np.ndarray]) -> None:
+        """Admin-only full reload of schema and catalog data."""
+        previous = self._allow_writes
+        self._allow_writes = True
+        try:
+            self.build(items, vectors)
+        finally:
+            self._allow_writes = previous
 
     def search(self, query_vector: np.ndarray, top_k: int) -> list[tuple[CatalogItem, float]]:
         if not self._item_lookup:
