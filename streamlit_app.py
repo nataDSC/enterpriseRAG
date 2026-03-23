@@ -343,7 +343,7 @@ def _init_telemetry() -> dict[str, bool]:
     return init_all()
 
 
-SIDEBAR_WIDTH = 380
+SIDEBAR_WIDTH = 420
 
 
 def main() -> None:
